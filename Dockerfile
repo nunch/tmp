@@ -1,42 +1,28 @@
-# build time image
-FROM microsoft/dotnet:2.1-sdk as build-env
-WORKDIR /app
+FROM node:10-alpine3.9
 
-#setup node
-ENV NODE_VERSION 8.11.1
-ENV NODE_DOWNLOAD_SHA 0e20787e2eda4cc31336d8327556ebc7417e8ee0a6ba0de96a09b0ec2b841f60
+ENV NODE_ENV production
 
-RUN curl -SL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" --output nodejs.tar.gz \
-    && echo "$NODE_DOWNLOAD_SHA nodejs.tar.gz" | sha256sum -c - \
-    && tar -xzf "nodejs.tar.gz" -C /usr/local --strip-components=1 \
-    && rm nodejs.tar.gz \
-    && ln -s /usr/local/bin/node /usr/local/bin/nodejs
+WORKDIR /quickchart
 
-# copy csproj and restore as distinct layers
-COPY *.csproj ./
-COPY NuGet.config ./
-RUN dotnet restore
+RUN apk add --no-cache --virtual .build-deps yarn git build-base g++ python
+RUN apk add --no-cache --virtual .npm-deps cairo-dev pango-dev libjpeg-turbo-dev
+RUN apk add --no-cache --virtual .fonts libmount ttf-dejavu ttf-droid ttf-freefont ttf-liberation ttf-ubuntu-font-family font-noto fontconfig
+RUN apk add wqy-zenhei --no-cache --repository http://nl.alpinelinux.org/alpine/edge/testing --allow-untrusted
+RUN apk add --no-cache --virtual .runtime-deps graphviz
 
-COPY ClientApp/package.json ./ClientApp/
-RUN cd ClientApp \
-    && npm install
+COPY package*.json .
+COPY yarn.lock .
+RUN yarn install --production
 
-# copy everything else and build
-COPY . ./
-RUN dotnet publish -c Release -o out
+RUN apk update
+RUN rm -rf /var/cache/apk/* && \
+    rm -rf /tmp/*
+RUN apk del .build-deps
 
-# build runtime image
-FROM microsoft/dotnet:2.1-aspnetcore-runtime
-WORKDIR /app
-#setup node, this is only needed if you use Node both at runtime and build time. Some people may only need the build part.
-ENV NODE_VERSION 8.11.1
-ENV NODE_DOWNLOAD_SHA 0e20787e2eda4cc31336d8327556ebc7417e8ee0a6ba0de96a09b0ec2b841f60
+COPY *.js ./
+COPY lib/*.js lib/
+COPY LICENSE .
 
-RUN curl -SL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" --output nodejs.tar.gz \
-    && echo "$NODE_DOWNLOAD_SHA nodejs.tar.gz" | sha256sum -c - \
-    && tar -xzf "nodejs.tar.gz" -C /usr/local --strip-components=1 \
-    && rm nodejs.tar.gz \
-    && ln -s /usr/local/bin/node /usr/local/bin/nodejs
+EXPOSE 3400
 
-COPY --from=build-env /app/out .
-ENTRYPOINT ["dotnet", "AspNetCoreSpa.dll"]
+ENTRYPOINT ["node", "--max-http-header-size=65536", "index.js"]
